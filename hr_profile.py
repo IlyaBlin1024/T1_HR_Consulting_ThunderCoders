@@ -44,6 +44,14 @@ def save_profiles_to_file(db: dict):
 def load_profiles() -> dict:
     with open(PROFILES_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
+    
+def save_saved_list(db: dict):
+    with open(SAVED_PATH, "w", encoding="utf-8") as f:
+        json.dump(db, f, ensure_ascii=False, indent=2)
+
+def load_saved_list() -> dict:
+    with open(SAVED_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 def embed_texts(texts: List[str]) -> List[List[float]]:
     resp = client.embeddings.create(model="bge-m3", input=texts)
@@ -78,6 +86,14 @@ class MatchResult(BaseModel):
     skills_overlap: List[str]
     profile_summary: Optional[str]
 
+class EmployeeReport(BaseModel):
+    profile_id: str
+    name: Optional[str]
+    title: Optional[str]
+    summary: Optional[str]
+    skills: List[Dict[str, Any]]
+    
+
 # ------------------------- LangGraph Pipeline -------------------------
 class ProfileState(TypedDict):
     file_bytes: bytes
@@ -107,7 +123,6 @@ def node_text_to_profile(state: ProfileState) -> ProfileState:
     )
     llm_text = resp.choices[0].message.content.strip()
 
-    # Попробуем "вычистить" JSON
     try:
         start = llm_text.find("{")
         end = llm_text.rfind("}") + 1
@@ -165,7 +180,7 @@ async def ingest_pdf(file: UploadFile = File(...)):
     content = await file.read()
     initial_state = {"file_bytes": content, "file_text": "", "profile": None}
     result_state = compiled_graph.invoke(initial_state)
-    profile = result_state["profile"]  # уже сохранён в JSON внутри графа
+    profile = result_state["profile"] 
     return {"status": "ok", "profile_id": profile["id"]}
 
 
@@ -196,24 +211,26 @@ def search_employees(req: SearchRequest):
             if not any(s.lower() in ' '.join(p.get('stack', [])).lower() for s in req.stack):
                 continue
 
-        # Вычисляем similarity
+        # --- Semantic similarity ---
         emb = np.array(p.get('_embedding'))
-        sim = cosine_sim(qemb, emb)
+        sim = cosine_sim(qemb, emb) 
 
-        # Skills overlap boost
+        # --- Overlap по стеку ---
         overlap = []
         if req.stack:
-            # приводим к нижнему регистру элементы стэка кандидата
             pstack_lower = [s.lower() for s in p.get('stack', []) if isinstance(s, str)]
             for sk in req.stack:
                 if sk.lower() in pstack_lower:
                     overlap.append(sk)
+        overlap_ratio = len(overlap) / len(req.stack) if req.stack else 0  # 0..1
 
-        boost = 0.134 * len(overlap)
+        # --- Взвешенная формула ---
+        sim_weight = 0.1
+        overlap_weight = 1.9
+        score = sim_weight * sim + overlap_weight * overlap_ratio
+        final_score = round(min(score / 2, 1.0) * 100, 2)
 
-        score = float(sim * (1 + boost))
-
-        results.append((score, pid, p, overlap))
+        results.append((final_score, pid, p, overlap))
 
     # Сортировка и top_k
     results.sort(key=lambda x: x[0], reverse=True)
@@ -223,12 +240,47 @@ def search_employees(req: SearchRequest):
             profile_id=pid,
             name=p.get('name'),
             title=p.get('title'),
-            match_score=round(score * 100, 2),
+            match_score=score,
             skills_overlap=overlap,
             profile_summary=p.get('summary')
         ))
 
     return out
+
+@app.post("/save_candidate/{profile_id}")
+def save_candidate(profile_id: str):
+    profiles = load_profiles()
+    if profile_id not in profiles:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    saved = load_saved_list()
+    if profile_id not in saved:
+        saved[profile_id] = profiles[profile_id]
+        save_saved_list(saved)
+
+    return {"status": "ok", "saved_count": len(saved)}
+
+@app.get("/saved_candidates/")
+def saved_candidates():
+    saved = load_saved_list()
+    return list(saved.values())
+
+
+@app.get("/employee_report/{profile_id}", response_model=EmployeeReport)
+def employee_report(profile_id: str):
+    db = load_profiles()
+    if profile_id not in db:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    p = db[profile_id]
+
+    return EmployeeReport(
+        profile_id=profile_id,
+        name=p.get("name"),
+        title=p.get("title"),
+        summary=p.get("summary"),
+        skills=p.get("skills", [])
+    )
+
 
 if __name__ == "__main__":
     import uvicorn
