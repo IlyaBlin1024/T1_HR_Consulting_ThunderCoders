@@ -4,9 +4,7 @@
 3) rec.txt - необходимое, что надо установить через pip
          pip install -r rec.txt
 
-
-    В ПАПКЕ test
-
+ В ПАПКЕ test
 
 1)auto_tests.py - автоматический запуск всех тестов
 2)def_tests.py - описание тестов
