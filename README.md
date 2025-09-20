@@ -1,6 +1,7 @@
 # T1_HR_Consulting_ThunderCoders
-1) examples.txt - примеры для LLM
-2) rec.txt - необходимое, что надо установить через pip
+1)rag.py - исполняемый файл
+2) examples.txt - примеры для LLM
+3) rec.txt - необходимое, что надо установить через pip
          pip install -r rec.txt
 
 
