@@ -1,5 +1,4 @@
 # T1_HR_Consulting_ThunderCoders
-<<<<<<< HEAD
 
 HR-ассистент на базе RAG, разработанный командой **ThunderCoders**. Анализирует профили кандидатов и помогает HR-специалистам принимать решения на основе данных.
 
@@ -85,9 +84,9 @@ tests/auto_tests.py — запускает тесты и выводит резу
          pip install -r rec.txt
 
  В ПАПКЕ test
-
+```
 1)auto_tests.py - автоматический запуск всех тестов
 2)def_tests.py - описание тестов
 3)rec_for_tests.txt - необходимое для тестов , что надо установить через pip
          pip install -r rec_for_tests.txt
->>>>>>> 77fa2348132cf1febd77050ed932d19109d9e4de
+```
