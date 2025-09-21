@@ -1,5 +1,4 @@
 from langgraph.graph import StateGraph, START, END
-from typing import TypedDict
 from config import SCIBOX_API_KEY
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from pydantic import BaseModel
@@ -7,7 +6,7 @@ import fitz  # PyMuPDF
 import json
 import os
 import numpy as np
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, TypedDict
 from openai import OpenAI
 from sklearn.metrics.pairwise import cosine_similarity
 from datetime import datetime

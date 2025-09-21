@@ -1,0 +1,11 @@
+langgraph
+fastapi
+config
+pydantic
+fitz
+json
+numpy
+typing
+openai
+sklearn
+datetime
