@@ -1,0 +1,6 @@
+langchain
+langchain-openai
+chromadb
+fastembed
+openai
+tiktoken
