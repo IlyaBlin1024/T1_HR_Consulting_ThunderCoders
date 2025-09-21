@@ -1,9 +1,3 @@
-"""
-Notes:
-- Install: pip install fastapi uvicorn python-multipart pymupdf openai numpy scikit-learn
-"""
-
-
 from langgraph.graph import StateGraph, START, END
 from typing import TypedDict
 from config import SCIBOX_API_KEY
@@ -61,6 +55,28 @@ def cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
     a = a.reshape(1, -1)
     b = b.reshape(1, -1)
     return float(cosine_similarity(a, b)[0][0])
+
+def compute_hr_potential(profile: dict) -> float:
+    skills = profile.get("skills", [])
+    if not skills:
+        return 30.0  # минимальная база
+
+    avg_level = np.mean([s.get("level", 50) for s in skills])
+    skill_count = len(skills)
+
+    readiness = profile.get("readiness_score", 50) or 50
+    rotation = profile.get("open_to_rotation", "unknown")
+
+    # Потенциал = средний уровень (вес 0.5) + разнообразие (вес 0.2) + readiness (вес 0.2) + ротация (0.1)
+    potential = (
+        0.5 * (avg_level) +
+        0.2 * min(skill_count * 10, 100) +
+        0.2 * readiness +
+        0.1 * (80 if rotation == "yes" else (50 if rotation == "unknown" else 20))
+    )
+
+    return round(min(100, potential), 2)
+
 
 # ------------------------- LLM Prompt -------------------------
 EXTRACTION_PROMPT = (
@@ -247,39 +263,125 @@ def search_employees(req: SearchRequest):
 
     return out
 
-@app.post("/save_candidate/{profile_id}")
-def save_candidate(profile_id: str):
-    profiles = load_profiles()
-    if profile_id not in profiles:
-        raise HTTPException(status_code=404, detail="Profile not found")
-
-    saved = load_saved_list()
-    if profile_id not in saved:
-        saved[profile_id] = profiles[profile_id]
-        save_saved_list(saved)
-
-    return {"status": "ok", "saved_count": len(saved)}
-
-@app.get("/saved_candidates/")
-def saved_candidates():
-    saved = load_saved_list()
-    return list(saved.values())
-
-
-@app.get("/employee_report/{profile_id}", response_model=EmployeeReport)
-def employee_report(profile_id: str):
+@app.post("/save_for_later/{hr_user}/{profile_id}")
+def save_for_later(hr_user: str, profile_id: str):
     db = load_profiles()
     if profile_id not in db:
         raise HTTPException(status_code=404, detail="Profile not found")
-    p = db[profile_id]
 
-    return EmployeeReport(
-        profile_id=profile_id,
-        name=p.get("name"),
-        title=p.get("title"),
-        summary=p.get("summary"),
-        skills=p.get("skills", [])
-    )
+    sl = load_saved_list()
+    if hr_user not in sl:
+        sl[hr_user] = []
+
+    if profile_id not in sl[hr_user]:
+        sl[hr_user].append(profile_id)
+
+    save_saved_list(sl)
+    return {"status": "saved", "profile_id": profile_id}
+
+
+@app.get("/saved/{hr_user}")
+def get_saved(hr_user: str):
+    sl = load_saved_list()
+    db = load_profiles()
+    saved_ids = sl.get(hr_user, [])
+    return [db[i] for i in saved_ids if i in db]
+
+
+@app.post("/search_saved_employees/", response_model=List[MatchResult])
+def search_saved_employees(hr_user: str, req: SearchRequest):
+    """
+    Поиск сотрудников только среди отложенных кандидатов HR-пользователя
+    с фильтрами: стек, минимальный опыт, максимальная ЗП, топ K.
+    """
+    sl = load_saved_list()
+    saved_ids = sl.get(hr_user, [])
+    if not saved_ids:
+        return []
+
+    db = load_profiles()
+    # Отбираем только сохранённые профили
+    saved_profiles = {pid: db[pid] for pid in saved_ids if pid in db}
+    if not saved_profiles:
+        return []
+
+    # Формируем embedding запроса
+    qtext = " ".join(req.stack) if req.stack else (req.direction or "general")
+    qemb = np.array(embed_texts([qtext])[0])
+
+    results = []
+    for pid, p in saved_profiles.items():
+        # --- Фильтры ---
+        if req.min_experience and p.get('years_experience') is not None:
+            if p['years_experience'] < req.min_experience:
+                continue
+        if req.max_salary and p.get('desired_salary'):
+            try:
+                if int(p['desired_salary']) > int(req.max_salary):
+                    continue
+            except Exception:
+                pass
+        if req.stack:
+            # проверяем пересечение стека
+            if not any(s.lower() in [x.lower() for x in p.get('stack', [])] for s in req.stack):
+                continue
+
+        # --- Semantic similarity ---
+        emb = np.array(p.get('_embedding'))
+        sim = cosine_sim(qemb, emb)
+
+        # --- Overlap по стеку ---
+        overlap = []
+        if req.stack:
+            pstack_lower = [s.lower() for s in p.get('stack', []) if isinstance(s, str)]
+            for sk in req.stack:
+                if sk.lower() in pstack_lower:
+                    overlap.append(sk)
+        overlap_ratio = len(overlap) / len(req.stack) if req.stack else 0  # 0..1
+
+        # --- Взвешенная формула ---
+        sim_weight = 0.1
+        overlap_weight = 1.9
+        score = sim_weight * sim + overlap_weight * overlap_ratio
+        final_score = round(min(score / 2, 1.0) * 100, 2)
+
+        results.append((final_score, pid, p, overlap))
+
+    # Сортировка и top_k
+    results.sort(key=lambda x: x[0], reverse=True)
+    out = []
+    for score, pid, p, overlap in results[:req.top_k]:
+        out.append(MatchResult(
+            profile_id=pid,
+            name=p.get('name'),
+            title=p.get('title'),
+            match_score=score,
+            skills_overlap=overlap,
+            profile_summary=p.get('summary')
+        ))
+
+    return out
+
+
+
+@app.get("/employee_report/{profile_id}")
+def employee_report(profile_id: str):
+    db = load_profiles()
+    profile = db.get(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    return {
+        "profile_id": profile_id,
+        "name": profile.get("name"),
+        "title": profile.get("title"),
+        "summary": profile.get("summary"),
+        "skills": profile.get("skills", []),
+        "stack": profile.get("stack", []),
+        "years_experience": profile.get("years_experience"),
+        "desired_salary": profile.get("desired_salary"),
+        "hr_potential": compute_hr_potential(profile)
+    }
 
 
 if __name__ == "__main__":
