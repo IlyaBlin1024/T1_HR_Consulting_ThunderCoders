@@ -37,6 +37,8 @@ python backend.py
 python gradiotest.py
 ```
 
+### Модуль HR аналитики находится в ветке HR_workspace
+
 
 
  
