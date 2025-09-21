@@ -66,7 +66,6 @@ def compute_hr_potential(profile: dict) -> float:
     readiness = profile.get("readiness_score", 50) or 50
     rotation = profile.get("open_to_rotation", "unknown")
 
-    # Потенциал = средний уровень (вес 0.5) + разнообразие (вес 0.2) + readiness (вес 0.2) + ротация (0.1)
     potential = (
         0.5 * (avg_level) +
         0.2 * min(skill_count * 10, 100) +
@@ -75,6 +74,23 @@ def compute_hr_potential(profile: dict) -> float:
     )
 
     return round(min(100, potential), 2)
+
+def compute_overall_skill_forecast(profile: dict) -> List[float]:
+    skills = profile.get("skills", [])
+    if not skills:
+        return []
+
+    readiness = profile.get("readiness_score", 50) or 50
+    rotation_factor = 1.2 if profile.get("open_to_rotation", "unknown") == "yes" else 1.0
+
+    current_avg = sum(s.get("level", 40) for s in skills) / len(skills)
+    target_level = max(80, current_avg + 20)
+    monthly_gain = ((target_level - current_avg) / 12) * (readiness / 100) * rotation_factor
+
+    periods = [0, 3, 6, 9, 12]  # каждые 3 месяца
+    forecast = [round(min(100, current_avg + monthly_gain * m), 1) for m in periods]
+    return forecast
+
 
 
 # ------------------------- LLM Prompt -------------------------
@@ -370,6 +386,8 @@ def employee_report(profile_id: str):
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
 
+    overall_forecast = compute_overall_skill_forecast(profile)
+
     return {
         "profile_id": profile_id,
         "name": profile.get("name"),
@@ -379,8 +397,10 @@ def employee_report(profile_id: str):
         "stack": profile.get("stack", []),
         "years_experience": profile.get("years_experience"),
         "desired_salary": profile.get("desired_salary"),
+        "overall_skill_forecast": overall_forecast,  # прогноз роста по совокупности навыков
         "hr_potential": compute_hr_potential(profile)
     }
+
 
 
 if __name__ == "__main__":
